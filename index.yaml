@@ -1,0 +1,110 @@
+{{ if .Values.GsDsoMsTest.deploy }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.app_name }}
+  namespace: {{ .Values.GsDsoMsTest.namespace }}
+spec:
+  selector:
+    app: {{ .Values.app_name }}
+  ports:
+    - name: service-port
+      protocol: TCP
+      port: {{ .Values.GsDsoMsTest.apiServicePort }}
+      targetPort: {{ .Values.GsDsoMsTest.apiContainerPort }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.app_name }}
+  namespace: {{ .Values.GsDsoMsTest.namespace }}
+  annotations:
+    proyect: {{ .Values.GsDsoMsTest.proyect | quote }}
+spec:
+  replicas: {{ .Values.GsDsoMsTest.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.app_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.app_name }}
+      annotations:
+        proyect: {{ .Values.GsDsoMsTest.proyect }}
+    spec:
+      imagePullSecrets:
+      - name: {{ .Values.GsDsoMsTest.repoSecretName }}
+      containers:
+      - name: {{ .Values.app_name }}
+        image: {{ .Values.GsDsoMsTest.image }}
+        imagePullPolicy: Always
+        command: ["/bin/sh"]
+        args: ["-c", "export UNIQUE_HOST_ID=$(sed -rn '1s#.*/##; 1s/(.{12}).*/\\1/p' /proc/self/cgroup) && npm start"]
+        ports:
+        - containerPort: {{ .Values.GsDsoMsTest.apiContainerPort }}
+        env:
+          {{- range $key, $value := .Values.GsDsoMsTest.envvars }}
+          - name: {{ $key }}
+            value: {{ $value | quote }}
+          {{- end }}
+        envFrom:
+        {{ if .Values.GsDsoMsTest.useSecret }}
+          - secretRef:
+                name: {{ .Values.app_name }}
+        {{ end }}
+        {{ if .Values.GsDsoMsTest.useAppdynamics }}
+          - configMapRef:
+              name: {{ .Values.app_name }}-appdynamics-config
+          - configMapRef:
+              name: appdynamics-node-config
+          - secretRef:
+              name: appdynamics-key-{{ .Values.GsDsoMsTest.namespace }}
+        {{ end }}
+        livenessProbe:
+          httpGet:
+            path: /{{ .Values.app_name }}/health
+            port: {{ .Values.GsDsoMsTest.apiContainerPort }}
+            scheme: HTTP
+          timeoutSeconds: 5
+          initialDelaySeconds: 10
+          periodSeconds: 20
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /{{ .Values.app_name }}/health
+            port: {{ .Values.GsDsoMsTest.apiContainerPort }}
+            scheme: HTTP
+          timeoutSeconds: 5
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 1
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ .Values.app_name }}
+  namespace: {{ .Values.GsDsoMsTest.namespace }}
+spec:
+  entryPoints:
+    - http
+  routes:
+  - match: Host(`{{ .Values.GsDsoMsTest.host }}`) && PathPrefix (`/{{ .Values.app_name }}`)
+    kind: Rule
+    services:
+    - name: {{ .Values.app_name }}
+      port: 80
+{{ if .Values.GsDsoMsTest.useAppdynamics }}
+---
+apiVersion: v1
+data:
+  APPDYNAMICS_AGENT_APPLICATION_NAME: {{ .Values.GsDsoMsTest.proyect }}
+  APPDYNAMICS_AGENT_TIER_NAME: {{ .Values.app_name }}
+kind: ConfigMap
+metadata:
+  name: {{ .Values.app_name }}-appdynamics-config
+  namespace: {{.Values.GsDsoMsTest.namespace}}
+{{ end }}
+{{ end }}
